@@ -1,0 +1,48 @@
+# HarmonyOS Knowledge Graph Configuration
+
+# 运行模式: memory(内存模式，用于Demo) | production(生产模式)
+mode: memory
+
+# 图数据库配置
+graph_db:
+  type: neo4j  # neo4j | memory
+  uri: bolt://localhost:7687
+  user: neo4j
+  password: password123
+  database: neo4j
+
+# 向量数据库配置
+vector_db:
+  type: memory  # milvus | memory
+  host: localhost
+  port: 19530
+  collection_prefix: harmonyos_kg
+
+# 嵌入模型配置
+embeddings:
+  # 文本嵌入
+  text_model: paraphrase-multilingual-MiniLM-L12-v2
+  text_dim: 384
+  # 图像嵌入 (可选)
+  image_model: clip-ViT-B-32
+  image_dim: 512
+
+# LLM配置 (用于意图生成)
+llm:
+  provider: openai  # openai | local | mock
+  model: gpt-4o-mini
+  api_key: ${OPENAI_API_KEY}
+  # 本地模型配置
+  local_endpoint: http://localhost:8080/v1
+
+# 查询配置
+query:
+  max_path_length: 10
+  similarity_threshold: 0.7
+  cache_ttl: 3600
+
+# API服务配置
+api:
+  host: 0.0.0.0
+  port: 8000
+  debug: true
