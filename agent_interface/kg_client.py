@@ -45,16 +45,34 @@ class ActionRecommendation:
     confidence: float = 0.0
     expected_page: str = ""
     description: str = ""
+    is_complete: bool = False  # 是否已到达目标页面
+    remaining_steps: int = 0   # 剩余步骤数
     
     def to_dict(self) -> Dict:
-        return {
-            "action": self.action_type,
+        """转换为符合API规范的字典格式"""
+        action_dict = {
+            "action_type": self.action_type,
             "widget_id": self.widget_id,
             "widget_text": self.widget_text,
+            "widget_xpath": getattr(self, 'widget_xpath', ''),
             "input_text": self.input_text,
             "confidence": self.confidence,
             "expected_page": self.expected_page,
             "description": self.description
+        }
+        
+        # 如果已完成，返回None作为action
+        if self.is_complete:
+            return {
+                "action": None,
+                "is_complete": True,
+                "remaining_steps": 0
+            }
+        
+        return {
+            "action": action_dict,
+            "is_complete": self.is_complete,
+            "remaining_steps": self.remaining_steps
         }
 
 
@@ -93,7 +111,12 @@ class KGClient:
         if api_endpoint is None:
             self.graph = graph_store or MemoryGraphStore()
             self.vectors = vector_store or VectorStoreManager(mode="memory")
-            self.embedder = embedding_model or EmbeddingModel(use_mock=True)
+            # 使用用户指定的模型，默认使用 all-MiniLM-L6-v2
+            self.embedder = embedding_model or EmbeddingModel(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                cache_folder="./embedding_models",
+                use_mock=False
+            )
             
             # 初始化查询引擎
             self.path_finder = PathFinder(self.graph, self.vectors, self.embedder)
@@ -196,15 +219,30 @@ class KGClient:
         if self._is_local:
             next_action = self.path_finder.get_next_action(current_page, intent)
             if next_action:
-                return ActionRecommendation(
-                    action_type=next_action["action"],
-                    widget_id=next_action["widget_id"],
+                # 检查是否已完成（remaining_steps == 0）
+                remaining_steps = next_action.get("remaining_steps", 0)
+                is_complete = remaining_steps == 0
+                
+                action_rec = ActionRecommendation(
+                    action_type=next_action.get("action_type", next_action.get("action", "click")),
+                    widget_id=next_action.get("widget_id", ""),
                     widget_text=next_action.get("widget_text", ""),
                     confidence=next_action.get("confidence", 0.0),
                     expected_page=next_action.get("expected_page", ""),
                     description=next_action.get("description", "")
                 )
-            return None
+                # 添加额外字段以符合API规范
+                action_rec.is_complete = is_complete
+                action_rec.remaining_steps = remaining_steps
+                return action_rec
+            # 如果没有下一步操作，返回已完成状态
+            return ActionRecommendation(
+                action_type="",
+                widget_id="",
+                widget_text="",
+                is_complete=True,
+                remaining_steps=0
+            )
         else:
             response = self._http.post("/api/v1/query/next-action", json={
                 "current_page_id": current_page,
@@ -246,7 +284,15 @@ class KGClient:
                 ui_hierarchy=ui_hierarchy,
                 page_title=page_title
             )
-            return result.to_dict() if result else None
+            if result:
+                return result.to_dict()
+            # 返回未匹配的结果
+            return {
+                "matched": False,
+                "page": None,
+                "available_actions": [],
+                "candidates": []
+            }
         else:
             response = self._http.post("/api/v1/query/match-page", json={
                 "app_id": app_id,
@@ -255,7 +301,7 @@ class KGClient:
             })
             return response.json()
     
-    def get_available_actions(self, page_id: str) -> List[Dict]:
+    def get_available_actions(self, page_id: str) -> Dict:
         """
         获取页面的所有可用操作
         
@@ -263,11 +309,39 @@ class KGClient:
             page_id: 页面ID
             
         Returns:
-            操作列表，每个包含 widget_id, action_type, leads_to 等
+            符合API规范的操作列表
         """
         if self._is_local:
+            page = self.graph.get_page(page_id)
+            if not page:
+                return {
+                    "page_id": page_id,
+                    "page_name": "",
+                    "actions": [],
+                    "total_count": 0
+                }
+            
             transitions = self.graph.get_outgoing_transitions(page_id)
-            return [t.to_dict() for t in transitions]
+            actions = []
+            for t in transitions:
+                target_page = self.graph.get_page(t.target_page_id)
+                actions.append({
+                    "action_type": t.action_type.value,
+                    "widget_id": t.trigger_widget_id,
+                    "widget_text": t.trigger_widget_text,
+                    "target_page_id": t.target_page_id,
+                    "target_page_name": target_page.page_name if target_page else "",
+                    "success_rate": t.success_rate,
+                    "avg_latency_ms": t.avg_latency_ms,
+                    "description": f"{t.action_type.value} {t.trigger_widget_text}"
+                })
+            
+            return {
+                "page_id": page_id,
+                "page_name": page.page_name,
+                "actions": actions,
+                "total_count": len(actions)
+            }
         else:
             response = self._http.get(f"/api/v1/pages/{page_id}/actions")
             return response.json()
@@ -334,6 +408,7 @@ class KGClient:
         if self._is_local:
             # 查找或创建转换
             transition = self.graph.get_transition(from_page, to_page)
+            is_updated = False
             
             if transition:
                 # 更新统计
@@ -342,6 +417,8 @@ class KGClient:
                     success=success,
                     latency_ms=latency_ms
                 )
+                is_updated = True
+                transition_id = transition.transition_id
             else:
                 # 创建新转换
                 trans = Transition(
@@ -354,9 +431,37 @@ class KGClient:
                     trigger_widget_text=action.get("widget_text", ""),
                     action_type=ActionType(action.get("type", "click")),
                     success_count=1 if success else 0,
-                    fail_count=0 if success else 1
+                    fail_count=0 if success else 1,
+                    avg_latency_ms=latency_ms
                 )
                 self.graph.add_transition(trans)
+                transition_id = trans.transition_id
+            
+            # 返回符合API规范的格式
+            updated_transition = self.graph.get_transition(from_page, to_page)
+            if updated_transition:
+                return {
+                    "success": True,
+                    "transition_id": transition_id,
+                    "updated": is_updated,
+                    "stats": {
+                        "success_count": updated_transition.success_count,
+                        "fail_count": updated_transition.fail_count,
+                        "success_rate": updated_transition.success_rate,
+                        "avg_latency_ms": updated_transition.avg_latency_ms
+                    }
+                }
+            return {
+                "success": True,
+                "transition_id": transition_id,
+                "updated": is_updated,
+                "stats": {
+                    "success_count": 0,
+                    "fail_count": 0,
+                    "success_rate": 0.0,
+                    "avg_latency_ms": 0
+                }
+            }
         else:
             self._http.post("/api/v1/graph/report-transition", json={
                 "from_page": from_page,
@@ -434,15 +539,177 @@ class KGClient:
                 "target_page_id": target_page,
                 "keywords": keywords or []
             })
+        else:
+            response = self._http.post("/api/v1/intent/register", json={
+                "app_id": app_id,
+                "intent_text": intent_text,
+                "target_page": target_page,
+                "keywords": keywords or []
+            })
+            data = response.json()
+            intent_id = data.get("intent_id", intent_id)
         
         return intent_id
+    
+    def find_similar_intents(
+        self,
+        query: str,
+        app_id: str = None,
+        top_k: int = 5
+    ) -> Dict:
+        """
+        查找相似意图
+        
+        Args:
+            query: 查询文本
+            app_id: 可选，限制在特定App内查找
+            top_k: 返回前K个结果
+            
+        Returns:
+            {
+                "intents": [...],
+                "total_found": int
+            }
+        """
+        if self._is_local:
+            # 编码查询文本
+            query_vec = self.embedder.encode_single(query)
+            
+            # 搜索相似意图
+            results = self.vectors.intents.search(query_vec, top_k=top_k)
+            
+            # 过滤app_id（如果指定）
+            intents = []
+            for r in results:
+                metadata = r.metadata
+                if app_id and metadata.get("app_id") != app_id:
+                    continue
+                
+                intents.append({
+                    "intent_id": r.id,
+                    "intent_text": metadata.get("text", ""),
+                    "app_id": metadata.get("app_id", ""),
+                    "target_page": metadata.get("target_page_id", ""),
+                    "similarity": r.score,
+                    "keywords": metadata.get("keywords", [])
+                })
+            
+            return {
+                "intents": intents,
+                "total_found": len(intents)
+            }
+        else:
+            response = self._http.post("/api/v1/intent/find-similar", json={
+                "query": query,
+                "app_id": app_id,
+                "top_k": top_k
+            })
+            return response.json()
+    
+    def batch_add_transitions(self, transitions: List[Dict]) -> Dict:
+        """
+        批量添加页面转换
+        
+        Args:
+            transitions: 转换关系列表
+            
+        Returns:
+            {
+                "success": bool,
+                "total": int,
+                "created": int,
+                "updated": int,
+                "failed": int,
+                "errors": [str]
+            }
+        """
+        if self._is_local:
+            created = 0
+            updated = 0
+            failed = 0
+            errors = []
+            
+            for trans_data in transitions:
+                try:
+                    from_page = trans_data.get("from_page")
+                    to_page = trans_data.get("to_page")
+                    action_type = trans_data.get("action_type", "click")
+                    widget_text = trans_data.get("widget_text", "")
+                    
+                    if not from_page or not to_page:
+                        failed += 1
+                        errors.append(f"缺少必要字段: {trans_data}")
+                        continue
+                    
+                    # 检查转换是否已存在
+                    existing = self.graph.get_transition(from_page, to_page)
+                    
+                    if existing:
+                        # 更新统计
+                        success_count = trans_data.get("success_count", 0)
+                        fail_count = trans_data.get("fail_count", 0)
+                        if success_count > 0 or fail_count > 0:
+                            for _ in range(success_count):
+                                self.graph.update_transition_stats(
+                                    existing.transition_id, success=True
+                                )
+                            for _ in range(fail_count):
+                                self.graph.update_transition_stats(
+                                    existing.transition_id, success=False
+                                )
+                        updated += 1
+                    else:
+                        # 创建新转换
+                        from kg_core.schema import Transition, ActionType
+                        
+                        transition = Transition(
+                            transition_id=Transition.generate_id(
+                                from_page, to_page, action_type
+                            ),
+                            source_page_id=from_page,
+                            target_page_id=to_page,
+                            trigger_widget_text=widget_text,
+                            action_type=ActionType(action_type),
+                            success_count=trans_data.get("success_count", 0),
+                            fail_count=trans_data.get("fail_count", 0)
+                        )
+                        self.graph.add_transition(transition)
+                        created += 1
+                except Exception as e:
+                    failed += 1
+                    errors.append(f"处理转换失败: {str(e)}")
+            
+            return {
+                "success": failed == 0,
+                "total": len(transitions),
+                "created": created,
+                "updated": updated,
+                "failed": failed,
+                "errors": errors
+            }
+        else:
+            response = self._http.post("/api/v1/graph/batch-add-transitions", json={
+                "transitions": transitions
+            })
+            return response.json()
     
     # ==================== 工具方法 ====================
     
     def get_graph_stats(self) -> Dict:
-        """获取图谱统计信息"""
+        """获取图谱统计信息（符合API规范）"""
         if self._is_local:
-            return self.graph.get_graph_stats()
+            stats = self.graph.get_graph_stats()
+            # 转换为API规范格式
+            from datetime import datetime
+            return {
+                "apps": stats.get("total_apps", 0),
+                "pages": stats.get("total_pages", 0),
+                "transitions": stats.get("total_transitions", 0),
+                "intents": self.vectors.intents.count() if hasattr(self.vectors.intents, 'count') else 0,
+                "avg_path_length": stats.get("avg_path_length", 0.0),
+                "avg_success_rate": stats.get("avg_success_rate", 0.0),
+                "last_updated": datetime.now().isoformat()
+            }
         else:
             response = self._http.get("/api/v1/graph/stats")
             return response.json()

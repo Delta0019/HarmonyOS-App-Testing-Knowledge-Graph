@@ -26,13 +26,33 @@ class QueryResult:
     confidence: float = 0.0
     
     def to_dict(self) -> Dict:
-        return {
+        """转换为符合API规范的字典格式"""
+        result = {
             "success": self.success,
-            "path": self.path.to_dict() if self.path else None,
-            "alternatives": [p.to_dict() for p in (self.alternatives or [])],
             "message": self.message,
             "confidence": self.confidence
         }
+        
+        if self.path:
+            path_dict = self.path.to_dict()
+            result["path"] = path_dict
+            
+            # 添加目标页面信息（如果可用）
+            if hasattr(self, 'target_page') and self.target_page:
+                result["target_page"] = self.target_page
+        
+        if self.alternatives:
+            result["alternatives"] = [
+                {
+                    "total_steps": alt.total_steps,
+                    "confidence": alt.confidence,
+                    "steps": [s.to_dict() for s in alt.steps],
+                    "reason": getattr(alt, 'reason', '备选路径')
+                }
+                for alt in self.alternatives
+            ]
+        
+        return result
 
 
 class PathFinder:
@@ -121,20 +141,38 @@ class PathFinder:
         action_path = self._build_action_path(intent, path_result)
         action_path.confidence = confidence
         
+        # 获取目标页面信息
+        target_page = self.graph.get_page(target_page_id)
+        target_page_info = None
+        if target_page:
+            target_page_info = {
+                "page_id": target_page.page_id,
+                "page_name": target_page.page_name,
+                "page_type": target_page.page_type.value,
+                "description": target_page.description
+            }
+        
         # 8. 查找备选路径
         alternatives = []
         all_paths = self.graph.find_all_paths(current_page_id, target_page_id, max_steps)
         for pr in all_paths[1:3]:  # 最多2条备选
             alt_path = self._build_action_path(intent, pr)
+            alt_path.confidence = confidence * 0.8  # 备选路径置信度稍低
+            # 添加备选原因
+            alt_path.reason = "路径更短但成功率较低" if pr.total_steps < path_result.total_steps else "备选路径"
             alternatives.append(alt_path)
         
-        return QueryResult(
+        result = QueryResult(
             success=True,
             path=action_path,
             alternatives=alternatives,
             confidence=confidence,
             message=f"找到路径，共{action_path.total_steps}步"
         )
+        # 添加目标页面信息到结果对象
+        result.target_page = target_page_info
+        
+        return result
     
     def find_path_direct(
         self,
@@ -204,14 +242,23 @@ class PathFinder:
         
         steps = []
         for i, trans in enumerate(path_result.transitions):
+            expected_page_id = path_result.pages[i + 1] if i + 1 < len(path_result.pages) else ""
+            expected_page = self.graph.get_page(expected_page_id) if expected_page_id else None
+            
             step = ActionStep(
                 step_index=i + 1,
                 action_type=ActionType(trans.get("action_type", "click")),
                 target_widget_id=trans.get("trigger_widget_id", ""),
                 target_widget_text=trans.get("trigger_widget_text", ""),
-                expected_page_id=path_result.pages[i + 1] if i + 1 < len(path_result.pages) else "",
-                description=f"点击 {trans.get('trigger_widget_text', '控件')}"
+                expected_page_id=expected_page_id,
+                description=f"{trans.get('action_type', 'click')} {trans.get('trigger_widget_text', '控件')}"
             )
+            # 添加额外字段
+            step.widget_xpath = trans.get("widget_xpath", "")
+            step.expected_page_name = expected_page.page_name if expected_page else ""
+            step.confidence = trans.get("confidence", 0.9)
+            step.success_rate = trans.get("success_rate", trans.get("success_rate", 0.0))
+            
             steps.append(step)
         
         intent_id = Intent.generate_id("", intent)

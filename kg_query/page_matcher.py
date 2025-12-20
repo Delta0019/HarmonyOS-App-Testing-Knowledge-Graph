@@ -27,12 +27,18 @@ class MatchResult:
     available_actions: List[Dict]
     
     def to_dict(self) -> Dict:
+        """转换为符合API规范的字典格式"""
         return {
-            "page_id": self.page_id,
-            "page_name": self.page_name,
-            "confidence": self.confidence,
-            "match_type": self.match_type,
-            "available_actions": self.available_actions
+            "matched": True,
+            "page": {
+                "page_id": self.page_id,
+                "page_name": self.page_name,
+                "page_type": getattr(self, 'page_type', 'other'),
+                "description": getattr(self, 'description', ''),
+                "confidence": self.confidence
+            },
+            "available_actions": self.available_actions,
+            "candidates": getattr(self, 'candidates', [])
         }
 
 
@@ -97,12 +103,26 @@ class PageMatcher:
                 candidates.extend(vec_matches)
         
         if not candidates:
-            return None
+            # 返回未匹配的结果
+            return MatchResult(
+                page_id="",
+                page_name="",
+                confidence=0.0,
+                match_type="none",
+                available_actions=[]
+            )
         
         # 合并和排序候选结果
         merged = self._merge_candidates(candidates)
         if not merged:
-            return None
+            # 返回未匹配的结果
+            return MatchResult(
+                page_id="",
+                page_name="",
+                confidence=0.0,
+                match_type="none",
+                available_actions=[]
+            )
         
         best_match = merged[0]
         page_id, confidence, match_type = best_match
@@ -110,18 +130,37 @@ class PageMatcher:
         # 获取页面详情
         page = self.graph.get_page(page_id)
         if not page:
-            return None
+            # 返回未匹配的结果
+            return MatchResult(
+                page_id="",
+                page_name="",
+                confidence=0.0,
+                match_type="none",
+                available_actions=[]
+            )
         
         # 获取可用操作
         available_actions = self._get_available_actions(page_id)
         
-        return MatchResult(
+        result = MatchResult(
             page_id=page_id,
             page_name=page.page_name,
             confidence=confidence,
             match_type=match_type,
             available_actions=available_actions
         )
+        # 添加额外字段
+        result.page_type = page.page_type.value
+        result.description = page.description
+        result.candidates = [
+            {
+                "page_id": pid,
+                "page_name": self.graph.get_page(pid).page_name if self.graph.get_page(pid) else "",
+                "confidence": conf
+            }
+            for pid, conf, _ in merged[1:3]  # 添加候选页面
+        ]
+        return result
     
     def _match_by_structure(
         self, 

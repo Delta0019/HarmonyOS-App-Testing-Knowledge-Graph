@@ -245,11 +245,16 @@ class ActionStep:
     def to_dict(self) -> Dict:
         return {
             "step": self.step_index,
-            "action": self.action_type.value,
+            "action_type": self.action_type.value,  # 符合API规范
+            "action": self.action_type.value,  # 保留向后兼容
             "widget_id": self.target_widget_id,
             "widget_text": self.target_widget_text,
+            "widget_xpath": getattr(self, 'widget_xpath', ''),  # 添加xpath字段
             "input_text": self.input_text,
             "expected_page": self.expected_page_id,
+            "expected_page_name": getattr(self, 'expected_page_name', ''),  # 添加页面名称
+            "confidence": getattr(self, 'confidence', 0.0),  # 添加置信度
+            "success_rate": getattr(self, 'success_rate', 0.0),  # 添加成功率
             "description": self.description
         }
 
@@ -319,15 +324,21 @@ class ActionPath:
         return self.success_count / self.execution_count if self.execution_count > 0 else 0.0
     
     def to_dict(self) -> Dict:
+        """转换为符合API规范的字典格式"""
+        # 计算预估耗时（假设每步500ms）
+        estimated_time_ms = self.total_steps * 500
+        
         return {
+            "total_steps": self.total_steps,
+            "estimated_time_ms": estimated_time_ms,
+            "steps": [s.to_dict() for s in self.steps],
+            "confidence": self.confidence,
+            "success_rate": self.success_rate,
+            # 保留向后兼容的字段
             "path_id": self.path_id,
             "intent_id": self.intent_id,
-            "total_steps": self.total_steps,
-            "steps": [s.to_dict() for s in self.steps],
             "start_page": self.start_page_id,
-            "end_page": self.end_page_id,
-            "confidence": self.confidence,
-            "success_rate": self.success_rate
+            "end_page": self.end_page_id
         }
     
     @staticmethod

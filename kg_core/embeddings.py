@@ -68,14 +68,22 @@ class SentenceTransformerEmbedding(BaseEmbeddingModel):
     SentenceTransformers嵌入模型
     
     推荐模型:
+    - sentence-transformers/all-MiniLM-L6-v2 (轻量级，384维)
     - paraphrase-multilingual-MiniLM-L12-v2 (多语言，384维)
     - BAAI/bge-small-zh-v1.5 (中文优化，512维)
     """
     
-    def __init__(self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"):
+    def __init__(
+        self, 
+        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        cache_folder: str = "./embedding_models"
+    ):
         try:
             from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer(model_name)
+            self.model = SentenceTransformer(
+                model_name,
+                cache_folder=cache_folder
+            )
             self._dim = self.model.get_sentence_embedding_dimension()
         except ImportError:
             raise ImportError("请安装sentence-transformers: pip install sentence-transformers")
@@ -138,7 +146,8 @@ class EmbeddingModel:
         self, 
         model_name: str = "auto",
         dimension: int = 384,
-        use_mock: bool = False
+        use_mock: bool = False,
+        cache_folder: str = "./embedding_models"
     ):
         self._model: BaseEmbeddingModel = None
         
@@ -147,14 +156,36 @@ class EmbeddingModel:
             return
         
         # 尝试加载SentenceTransformers
-        if model_name == "auto" or "sentence" in model_name.lower():
+        if model_name == "auto":
+            # 默认使用用户已下载的模型
+            default_model = "sentence-transformers/all-MiniLM-L6-v2"
             try:
                 self._model = SentenceTransformerEmbedding(
-                    "paraphrase-multilingual-MiniLM-L12-v2"
+                    default_model,
+                    cache_folder=cache_folder
                 )
                 return
-            except ImportError:
-                pass
+            except Exception as e:
+                print(f"⚠️ 无法加载模型 {default_model}: {e}")
+                # 尝试备用模型
+                try:
+                    self._model = SentenceTransformerEmbedding(
+                        "paraphrase-multilingual-MiniLM-L12-v2",
+                        cache_folder=cache_folder
+                    )
+                    return
+                except Exception:
+                    pass
+        elif model_name:
+            # 使用指定的模型名称
+            try:
+                self._model = SentenceTransformerEmbedding(
+                    model_name,
+                    cache_folder=cache_folder
+                )
+                return
+            except Exception as e:
+                print(f"⚠️ 无法加载模型 {model_name}: {e}")
         
         # 回退到Mock
         print("⚠️ 使用Mock嵌入模型（仅用于测试）")
@@ -186,5 +217,6 @@ def get_embedding_model(config: dict = None) -> EmbeddingModel:
     return EmbeddingModel(
         model_name=config.get("text_model", "auto"),
         dimension=config.get("text_dim", 384),
-        use_mock=config.get("use_mock", False)
+        use_mock=config.get("use_mock", False),
+        cache_folder=config.get("cache_folder", "./embedding_models")
     )

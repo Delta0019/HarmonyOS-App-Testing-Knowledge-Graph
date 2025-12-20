@@ -60,14 +60,35 @@ class RAGContext:
         return "\n".join(prompt_parts)
     
     def to_dict(self) -> Dict:
+        """转换为符合API规范的字典格式"""
         return {
-            "query": self.query,
-            "paths": self.retrieved_paths,
-            "pages": self.retrieved_pages,
-            "graph_context": self.graph_context,
-            "suggested_actions": self.suggested_actions,
-            "confidence": self.confidence,
-            "prompt": self.to_prompt()
+            "prompt": self.to_prompt(),
+            "context": {
+                "relevant_pages": [
+                    {
+                        "page_id": p.get("id", ""),
+                        "page_name": p.get("name", ""),
+                        "description": p.get("description", ""),
+                        "relevance_score": p.get("similarity", 0.0)
+                    }
+                    for p in self.retrieved_pages
+                ],
+                "recommended_paths": [
+                    {
+                        "path_id": p.get("path_id", ""),
+                        "steps": p.get("steps", []),
+                        "confidence": p.get("confidence", 0.0),
+                        "success_rate": p.get("success_rate", 0.0)
+                    }
+                    for p in self.retrieved_paths
+                ],
+                "historical_cases": {
+                    "successful": [],
+                    "failed": []
+                },
+                "tips": []
+            },
+            "suggested_actions": self.suggested_actions
         }
 
 
