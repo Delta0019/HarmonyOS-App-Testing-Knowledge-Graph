@@ -44,5 +44,8 @@ Thumbs.db
 htmlcov/
 *.json
 
+# Model
+embedding_models/
+
 # Config (如果包含敏感信息)
 # config/config.yaml
