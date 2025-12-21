@@ -483,7 +483,3 @@ curl -X POST http://localhost:8000/api/v1/query/next-action \
 ## 📝 更多文档
 
 - [QUICKSTART.md](QUICKSTART.md) - 详细的快速开始指南和集成示例
-
-## 📄 许可证
-
-本项目为毕业设计项目。
