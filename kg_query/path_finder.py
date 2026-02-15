@@ -129,9 +129,19 @@ class PathFinder:
             )
         
         # 6. 查找路径
-        path_result = self.graph.find_shortest_path(current_page_id, target_page_id)
-        
-        if not path_result:
+        # 特殊处理：当current_page等于target_page时，表示操作已经在目标页面上执行
+        if current_page_id == target_page_id:
+            # 创建一个虚拟的单页路径，表示操作在当前页面执行
+            from kg_core.graph_store import PathResult
+            path_result = PathResult(
+                pages=[current_page_id],
+                transitions=[],
+                total_steps=0
+            )
+        else:
+            path_result = self.graph.find_shortest_path(current_page_id, target_page_id)
+
+        if not path_result and current_page_id != target_page_id:
             return QueryResult(
                 success=False,
                 message=f"从当前页面到目标页面不可达"

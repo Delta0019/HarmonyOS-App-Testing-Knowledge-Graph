@@ -480,6 +480,31 @@ curl -X POST http://localhost:8000/api/v1/query/next-action \
 - 使用 `Milvus` 作为向量数据库
 - 支持持久化存储和分布式部署
 
-## 📝 更多文档
+## 📚 完整文档
 
-- [QUICKSTART.md](QUICKSTART.md) - 详细的快速开始指南和集成示例
+所有文档已按类别整理到 [docs/](docs/) 目录。查看 [docs/INDEX.md](docs/INDEX.md) 获取完整导航。
+
+### 快速导航
+
+- 🚀 **快速开始** → [docs/00_START_HERE.md](docs/00_START_HERE.md) (2分钟)
+- 📖 **用户指南** → [docs/02_USER_GUIDE.md](docs/02_USER_GUIDE.md) (30分钟)
+- 🏗️ **系统架构** → [docs/03_ARCHITECTURE.md](docs/03_ARCHITECTURE.md) (开发者必读)
+- ⚡ **性能优化** → [docs/04_OPTIMIZATION.md](docs/04_OPTIMIZATION.md) (优化参考)
+- 🔌 **API参考** → [docs/05_API_REFERENCE.md](docs/05_API_REFERENCE.md) (API集成)
+- 🔬 **评估框架** → [experiments/docs/EVALUATION_GUIDE.md](experiments/docs/EVALUATION_GUIDE.md) (技术细节)
+
+### 文档系统
+
+```
+docs/
+├── INDEX.md                    ← 文档导航总览
+├── 00_START_HERE.md            ← 快速开始指南
+├── 01_QUICK_REFERENCE.md       ← 快速参考卡
+├── 02_USER_GUIDE.md            ← 完整用户指南
+├── 03_ARCHITECTURE.md          ← 系统架构和开发指南
+├── 04_OPTIMIZATION.md          ← 代码优化说明
+└── 05_API_REFERENCE.md         ← API完全参考
+
+experiments/docs/
+└── EVALUATION_GUIDE.md         ← 评估框架指南
+```
