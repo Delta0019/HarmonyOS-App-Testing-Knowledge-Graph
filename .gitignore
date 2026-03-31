@@ -47,5 +47,13 @@ htmlcov/
 # Model
 embedding_models/
 
+# GUI Agent runtime artifacts
+gui_agent/**/experiments/
+gui_agent/**/.venv/
+gui_agent/**/utg.json
+gui_agent/**/ContactsAddContact/
+gui_agent/**/traj_*/
+*.mp4
+
 # Config (如果包含敏感信息)
 # config/config.yaml
