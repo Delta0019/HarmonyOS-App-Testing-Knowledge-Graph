@@ -279,6 +279,154 @@ if matched:
 
 **一句话总结**：知识图谱让GUI测试Agent从"新手"变成"专家"，从"试错"变成"导航"，从"昂贵"变成"高效"。
 
+## 🔗 与 AndroidWorld Agent 的实际对接
+
+本知识图谱已与 [utg-guided-gui-agent](../utg-guided-gui-agent/) 项目中的 Mobile-Agent-v3 完成深度整合，作为 Agent 的**唯一导航知识系统**（取代了原有的 AppGraph 和 UTG）。
+
+### 对接架构
+
+```
+Mobile-Agent-v3 (step loop)
+    │
+    ├─ step_idx == 0 ──→ BridgeAdapter.plan_task(intent, state)
+    │                        └─→ KGClient.query_path() → 宏观路径规划
+    │
+    ├─ 每步执行前 ──→ BridgeAdapter.get_combined_hint(goal, state)
+    │                    ├─→ KG 宏观方向: "step 2/5, next: WiFi Settings"
+    │                    ├─→ 导航提示: 已知动作 + 成功率
+    │                    └─→ 探索提示: 未探索的可点击控件
+    │
+    └─ 每步执行后 ──→ BridgeAdapter.report_transition(before, action, after)
+                         ├─→ 自动注册新页面（structural_fingerprint）
+                         ├─→ 记录转换（含 widget class/resource_id/center）
+                         └─→ JSON 持久化到 kg_graph.json
+```
+
+### 结构指纹匹配（Structural Fingerprinting）
+
+传统的页面匹配依赖完整 UI 树的 JSON 哈希，对动态内容（列表文字、时间等）非常敏感。本系统采用**基于控件结构的稳定指纹**：
+
+```python
+# 只用 class_name + resource_id 作为结构特征
+# 忽略 text（动态内容）和 bounds（布局微调）
+fingerprint = Page.compute_structural_fingerprint(
+    app_id="com.android.settings",
+    activity=".Settings",
+    widgets_data=[
+        {"class_name": "LinearLayout", "resource_id": "network_item"},
+        {"class_name": "LinearLayout", "resource_id": "bt_item"},
+    ]
+)
+# → "d2288ed906b774ef" (16字符MD5)
+```
+
+**优势**：同一页面在不同数据下（列表内容变化、文字更新）仍匹配到同一个 page_id。
+
+匹配策略（优先级递减）：
+1. **指纹精确匹配**（confidence=1.0）：structural_fingerprint 完全相同
+2. **Jaccard 模糊匹配**（threshold≥0.7）：class_name|resource_id 集合的交并比
+3. **语义向量匹配**（threshold≥0.6）：基于 sentence-transformer 的嵌入相似度
+
+### 导航提示（Navigation Hints）
+
+注入到 Executor LLM prompt 中的导航知识，示例：
+
+```
+[App Navigation Knowledge Graph]
+Current page: Settings (depth: 0, visited: 3 times)
+
+Known actions from this page (5 total):
+  1. Click "Network & internet" [network_item] (LinearLayout) at (540, 300)
+     -> NetworkPage (success: 8/10, 80%)
+  2. Click "Connected devices" [bt_item] (LinearLayout) at (540, 450)
+     -> BluetoothPage (success: 5/5, 100%)
+  3. Click "Apps" [apps_item] (LinearLayout) at (540, 600)
+     -> AppsPage (success: 3/4, 75%)
+
+[Exploration Opportunity] 2 unexplored clickable widgets:
+  1. Accessibility at (540, 900) (LinearLayout)
+  2. About phone at (540, 1050) (LinearLayout)
+```
+
+### Widget 级别的转换追踪
+
+每次 Agent 执行动作后，KG 记录完整的控件信息：
+
+```python
+# 自动记录到 KG 的转换数据
+Transition(
+    source_page_id="settings_home",
+    target_page_id="wifi_settings",
+    action_type=ActionType.CLICK,
+    trigger_widget_text="Network & internet",    # 控件文字
+    trigger_widget_class="LinearLayout",          # 控件类名
+    trigger_widget_resource_id="network_item",    # resource_id
+    trigger_widget_center=(540, 300),             # 中心坐标
+    success_count=8, fail_count=2,                # 累积统计
+)
+```
+
+### 增量学习与自动页面注册
+
+Agent 运行过程中遇到未知页面时，KG 自动：
+1. 从 UI 元素提取 structural_fingerprint
+2. 启发式提取页面标题（toolbar → title resource_id → 顶部文字）
+3. 注册为新页面节点
+4. 记录到达该页面的转换边
+5. JSON 持久化（每次转换后自动保存到 `kg_graph.json`）
+
+### 运行命令
+
+```bash
+cd utg-guided-gui-agent/gui_agent/MobileAgent/Mobile-Agent-v3/android_world_v3
+
+python run_ma3.py \
+  --suite_family=android_world \
+  --tasks=SystemWifiTurnOnVerify \
+  --agent_name=mobile_agent_v3 \
+  --model=gui-owl-7b \
+  --api_key=EMPTY \
+  --base_url=http://127.0.0.1:8000/v1 \
+  --use_kg=True \
+  --kg_project_path=/path/to/HarmonyOS-App-Testing-Knowledge-Graph \
+  --fusion_mode=both
+```
+
+### 实际测试结果（AndroidWorld 基准）
+
+首轮全量测试（86个有效case），KG 模式：
+
+| 类别 | 成功/总数 | 成功率 |
+|------|-----------|--------|
+| System WiFi/BT | 4/6 | 66.7% |
+| Clock | 2/3 | 66.7% |
+| OsmAnd | 2/3 | 66.7% |
+| SportsTracker 查询 | 2/4 | 50% |
+| Notes 查询 | 2/4 | 50% |
+| Calendar 查询 | 3/6 | 50% |
+| **整体** | **19/86** | **22.1%** |
+
+KG 数据积累（单轮运行后）：
+- 页面节点：276
+- 转换边：412
+- 覆盖应用：24
+
+### 关键文件
+
+| 文件 | 说明 |
+|------|------|
+| `kg_core/schema.py` | Page/Transition/Widget 数据模型（含 structural_fingerprint） |
+| `kg_core/graph_store.py` | 图存储（含 JSON 持久化、指纹查询） |
+| `kg_query/page_matcher.py` | 页面匹配（指纹 + Jaccard + 向量） |
+| `agent_interface/kg_client.py` | Agent 统一接口 |
+| `bridge/adapter.py`* | 桥接层（在 android_world_v3 项目中） |
+| `bridge/hint_formatter.py`* | 导航/探索提示格式化 |
+| `bridge/page_abstractor.py`* | State → KG 数据转换 |
+
+*bridge 文件位于 `android_world_v3/android_world/bridge/` 目录
+
+---
+
 ## 🚀 快速开始
 
 ### 1. 安装依赖

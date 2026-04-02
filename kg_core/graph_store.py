@@ -214,6 +214,50 @@ class MemoryGraphStore(BaseGraphStore):
             "avg_out_degree": sum(self.graph.out_degree(n) for n in self.graph.nodes()) / max(len(self.pages), 1)
         }
     
+    def get_outgoing_transitions_sorted(self, page_id: str) -> List[Transition]:
+        """获取页面出边，按 success_rate 降序排列"""
+        transitions = self.get_outgoing_transitions(page_id)
+        transitions.sort(
+            key=lambda t: (t.success_rate, t.success_count + t.fail_count),
+            reverse=True,
+        )
+        return transitions
+
+    def find_matching_transition(
+        self,
+        source_id: str,
+        target_id: str,
+        action_type: str,
+        widget_resource_id: str = "",
+        widget_text: str = "",
+    ) -> Optional[Transition]:
+        """按 widget 标识查找已有转换（搬自 AppGraph._find_existing_transition）。
+
+        优先匹配 resource_id，其次匹配 text。
+        """
+        for t in self.transitions.values():
+            if t.source_page_id != source_id or t.target_page_id != target_id:
+                continue
+            if t.action_type.value != action_type:
+                continue
+            # resource_id 精确匹配
+            if widget_resource_id and t.trigger_widget_resource_id == widget_resource_id:
+                return t
+            # text 精确匹配
+            if widget_text and t.trigger_widget_text == widget_text:
+                return t
+        return None
+
+    def find_page_by_fingerprint(
+        self, structural_fingerprint: str, app_id: str = ""
+    ) -> Optional[Page]:
+        """按结构指纹精确查找页面"""
+        for page in self.pages.values():
+            if page.structural_fingerprint == structural_fingerprint:
+                if not app_id or page.app_id == app_id:
+                    return page
+        return None
+
     def export_to_dict(self) -> Dict:
         """导出图谱为字典格式"""
         return {
@@ -221,7 +265,34 @@ class MemoryGraphStore(BaseGraphStore):
             "pages": [p.to_dict() for p in self.pages.values()],
             "transitions": [t.to_dict() for t in self.transitions.values()]
         }
-    
+
+    def save_to_json(self, path: str):
+        """保存图谱到 JSON 文件"""
+        import json, os
+        os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
+        data = {
+            "pages": {pid: p.to_dict() for pid, p in self.pages.items()},
+            "transitions": [t.to_dict() for t in self.transitions.values()],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def load_from_json(self, path: str):
+        """从 JSON 文件加载图谱"""
+        import json, os
+        if not os.path.exists(path):
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # 加载页面
+        for pid, pd in data.get("pages", {}).items():
+            page = Page.from_dict(pd)
+            self.add_page(page)
+        # 加载转换
+        for td in data.get("transitions", []):
+            transition = Transition.from_dict(td)
+            self.add_transition(transition)
+
     def clear(self):
         """清空图谱"""
         self.graph.clear()

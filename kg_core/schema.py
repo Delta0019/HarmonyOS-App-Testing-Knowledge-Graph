@@ -59,6 +59,8 @@ class ActionType(str, Enum):
     SCROLL = "scroll"
     BACK = "back"
     HOME = "home"
+    ENTER = "enter"
+    OPEN_APP = "open_app"
 
 
 @dataclass
@@ -132,7 +134,10 @@ class Page:
     
     # 状态特征
     state_hash: str = ""           # 页面状态哈希
-    
+    structural_fingerprint: str = ""  # 基于 class_name|resource_id 的稳定指纹
+    activity: str = ""             # Android Activity 名
+    last_visited: str = ""         # ISO 时间戳
+
     # 语义信息
     title: str = ""                # 页面标题
     description: str = ""          # 功能描述 (LLM生成)
@@ -160,27 +165,109 @@ class Page:
             "app_id": self.app_id,
             "page_type": self.page_type.value,
             "state_hash": self.state_hash,
+            "structural_fingerprint": self.structural_fingerprint,
+            "activity": self.activity,
+            "last_visited": self.last_visited,
             "title": self.title,
             "description": self.description,
             "intents": self.intents,
             "keywords": self.keywords,
             "depth": self.depth,
             "visit_count": self.visit_count,
-            "widget_count": len(self.widgets)
+            "widget_count": len(self.widgets),
+            "widgets": [w.to_dict() for w in self.widgets],
         }
-    
+
+    @staticmethod
+    def from_dict(d: Dict) -> "Page":
+        """从字典反序列化"""
+        widgets = []
+        for wd in d.get("widgets", []):
+            wt = wd.get("widget_type", "other")
+            try:
+                wt_enum = WidgetType(wt)
+            except ValueError:
+                wt_enum = WidgetType.OTHER
+            widgets.append(Widget(
+                widget_id=wd.get("widget_id", ""),
+                widget_type=wt_enum,
+                text=wd.get("text", ""),
+                content_desc=wd.get("content_desc", ""),
+                resource_id=wd.get("resource_id", ""),
+                xpath=wd.get("xpath", ""),
+                bounds=wd.get("bounds", {}),
+                is_clickable=wd.get("is_clickable", False),
+                is_scrollable=wd.get("is_scrollable", False),
+                is_editable=wd.get("is_editable", False),
+                semantic_role=wd.get("semantic_role", ""),
+            ))
+        pt = d.get("page_type", "other")
+        try:
+            pt_enum = PageType(pt)
+        except ValueError:
+            pt_enum = PageType.OTHER
+        return Page(
+            page_id=d["page_id"],
+            page_name=d.get("page_name", ""),
+            app_id=d.get("app_id", ""),
+            page_type=pt_enum,
+            state_hash=d.get("state_hash", ""),
+            structural_fingerprint=d.get("structural_fingerprint", ""),
+            activity=d.get("activity", ""),
+            last_visited=d.get("last_visited", ""),
+            title=d.get("title", ""),
+            description=d.get("description", ""),
+            intents=d.get("intents", []),
+            keywords=d.get("keywords", []),
+            widgets=widgets,
+            depth=d.get("depth", 0),
+            visit_count=d.get("visit_count", 0),
+        )
+
     @staticmethod
     def generate_id(app_id: str, page_name: str, state_hash: str = "") -> str:
         """生成页面唯一ID"""
         content = f"{app_id}:{page_name}:{state_hash}"
         return hashlib.md5(content.encode()).hexdigest()[:16]
-    
+
     @staticmethod
     def compute_state_hash(ui_hierarchy: Dict) -> str:
         """计算页面状态哈希"""
-        # 简化版：基于控件树结构计算哈希
         simplified = json.dumps(ui_hierarchy, sort_keys=True)
         return hashlib.md5(simplified.encode()).hexdigest()[:8]
+
+    @staticmethod
+    def compute_structural_fingerprint(
+        app_id: str, activity: str, widgets_data: List[Dict]
+    ) -> str:
+        """基于 class_name|resource_id 生成稳定的结构指纹。
+
+        设计原则（搬自 AppGraph）：
+        - 只用 class_name + resource_id 作为结构特征
+        - 忽略 text（动态内容）和 bounds（布局微调）
+        - 这样同一页面在不同数据下仍会匹配
+
+        Args:
+            app_id: 包名
+            activity: Activity 名
+            widgets_data: 控件字典列表，每个至少含 class/class_name 和 resource_id
+
+        Returns:
+            16 字符 hex 指纹
+        """
+        structural_features = sorted(set(
+            f"{w.get('class_name') or w.get('class', '')}|{w.get('resource_id', '')}"
+            for w in widgets_data
+            if w.get("resource_id")
+        ))
+        if not structural_features:
+            structural_features = sorted(set(
+                w.get("class_name") or w.get("class", "")
+                for w in widgets_data
+                if w.get("class_name") or w.get("class")
+            ))
+        fingerprint = f"{app_id}:{activity}:{','.join(structural_features)}"
+        return hashlib.md5(fingerprint.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass
@@ -193,10 +280,14 @@ class Transition:
     # 触发信息
     trigger_widget_id: str = ""    # 触发控件
     trigger_widget_text: str = ""  # 触发控件文本
+    trigger_widget_class: str = "" # 触发控件类名
+    trigger_widget_resource_id: str = ""  # 触发控件 resource_id
+    trigger_widget_center: tuple = ()     # 触发控件中心坐标 (x, y)
     action_type: ActionType = ActionType.CLICK
-    
+
     # 输入数据 (如果需要)
     input_data: Dict[str, str] = field(default_factory=dict)
+    input_text: str = ""           # INPUT 类型时的输入文本
     
     # 统计信息
     success_count: int = 0
@@ -219,15 +310,51 @@ class Transition:
             "target_page_id": self.target_page_id,
             "trigger_widget_id": self.trigger_widget_id,
             "trigger_widget_text": self.trigger_widget_text,
+            "trigger_widget_class": self.trigger_widget_class,
+            "trigger_widget_resource_id": self.trigger_widget_resource_id,
+            "trigger_widget_center": list(self.trigger_widget_center) if self.trigger_widget_center else [],
             "action_type": self.action_type.value,
             "input_data": self.input_data,
+            "input_text": self.input_text,
             "success_rate": self.success_rate,
-            "success_count": self.success_count
+            "success_count": self.success_count,
+            "fail_count": self.fail_count,
+            "avg_latency_ms": self.avg_latency_ms,
         }
-    
+
     @staticmethod
-    def generate_id(source_id: str, target_id: str, action: str) -> str:
-        content = f"{source_id}->{target_id}:{action}"
+    def from_dict(d: Dict) -> "Transition":
+        """从字典反序列化"""
+        at = d.get("action_type", "click")
+        try:
+            at_enum = ActionType(at)
+        except ValueError:
+            at_enum = ActionType.CLICK
+        center = d.get("trigger_widget_center", ())
+        if isinstance(center, list):
+            center = tuple(center)
+        return Transition(
+            transition_id=d["transition_id"],
+            source_page_id=d.get("source_page_id", ""),
+            target_page_id=d.get("target_page_id", ""),
+            trigger_widget_id=d.get("trigger_widget_id", ""),
+            trigger_widget_text=d.get("trigger_widget_text", ""),
+            trigger_widget_class=d.get("trigger_widget_class", ""),
+            trigger_widget_resource_id=d.get("trigger_widget_resource_id", ""),
+            trigger_widget_center=center,
+            action_type=at_enum,
+            input_data=d.get("input_data", {}),
+            input_text=d.get("input_text", ""),
+            success_count=d.get("success_count", 0),
+            fail_count=d.get("fail_count", 0),
+            avg_latency_ms=d.get("avg_latency_ms", 0),
+        )
+
+    @staticmethod
+    def generate_id(source_id: str, target_id: str, action: str,
+                    widget_key: str = "") -> str:
+        """生成转换唯一 ID，加入 widget 标识以区分同页面不同控件的转换"""
+        content = f"{source_id}->{target_id}:{action}:{widget_key}"
         return hashlib.md5(content.encode()).hexdigest()[:12]
 
 

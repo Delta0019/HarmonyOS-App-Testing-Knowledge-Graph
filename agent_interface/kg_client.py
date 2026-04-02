@@ -406,30 +406,63 @@ class KGClient:
             ... )
         """
         if self._is_local:
-            # 查找或创建转换
-            transition = self.graph.get_transition(from_page, to_page)
+            # 提取 widget 标识
+            widget_rid = action.get("widget_resource_id", action.get("widget", ""))
+            widget_text = action.get("widget_text", "")
+            action_type_str = action.get("type", "click")
+
+            # 用 find_matching_transition 精确匹配（按 widget 区分）
+            transition = None
+            if hasattr(self.graph, "find_matching_transition"):
+                transition = self.graph.find_matching_transition(
+                    from_page, to_page, action_type_str, widget_rid, widget_text
+                )
+            if not transition:
+                transition = self.graph.get_transition(from_page, to_page)
             is_updated = False
-            
+
             if transition:
-                # 更新统计
                 self.graph.update_transition_stats(
                     transition.transition_id,
                     success=success,
                     latency_ms=latency_ms
                 )
+                # 补充 widget 信息（可能旧转换缺失这些字段）
+                if not transition.trigger_widget_class and action.get("widget_class"):
+                    transition.trigger_widget_class = action["widget_class"]
+                if not transition.trigger_widget_resource_id and widget_rid:
+                    transition.trigger_widget_resource_id = widget_rid
+                center = action.get("widget_center", ())
+                if center and not transition.trigger_widget_center:
+                    transition.trigger_widget_center = tuple(center) if isinstance(center, (list, tuple)) else ()
+                if action.get("input_text") and not transition.input_text:
+                    transition.input_text = action["input_text"]
                 is_updated = True
                 transition_id = transition.transition_id
             else:
-                # 创建新转换
+                # 安全解析 action_type
+                try:
+                    at_enum = ActionType(action_type_str)
+                except ValueError:
+                    at_enum = ActionType.CLICK
+                center = action.get("widget_center", ())
+                if isinstance(center, list):
+                    center = tuple(center)
+
                 trans = Transition(
                     transition_id=Transition.generate_id(
-                        from_page, to_page, action.get("type", "click")
+                        from_page, to_page, action_type_str,
+                        widget_key=widget_rid or widget_text,
                     ),
                     source_page_id=from_page,
                     target_page_id=to_page,
                     trigger_widget_id=action.get("widget", ""),
-                    trigger_widget_text=action.get("widget_text", ""),
-                    action_type=ActionType(action.get("type", "click")),
+                    trigger_widget_text=widget_text,
+                    trigger_widget_class=action.get("widget_class", ""),
+                    trigger_widget_resource_id=widget_rid,
+                    trigger_widget_center=center,
+                    action_type=at_enum,
+                    input_text=action.get("input_text", ""),
                     success_count=1 if success else 0,
                     fail_count=0 if success else 1,
                     avg_latency_ms=latency_ms

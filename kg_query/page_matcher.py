@@ -65,23 +65,25 @@ class PageMatcher:
         ui_hierarchy: Dict = None,
         screenshot_embedding: List[float] = None,
         page_title: str = None,
-        strategy: str = "hybrid"
+        strategy: str = "hybrid",
+        activity: str = "",
     ) -> Optional[MatchResult]:
         """
         匹配当前页面
-        
+
         Args:
             app_id: 应用ID
             ui_hierarchy: UI控件树
             screenshot_embedding: 截图向量
             page_title: 页面标题
             strategy: 匹配策略 (structural | visual | hybrid)
+            activity: Android Activity 名
         """
         candidates = []
-        
-        # 策略1: 基于结构的匹配
+
+        # 策略1: 基于结构的匹配（使用 class_name|resource_id 指纹）
         if strategy in ["structural", "hybrid"] and ui_hierarchy:
-            struct_matches = self._match_by_structure(app_id, ui_hierarchy)
+            struct_matches = self._match_by_structure(app_id, ui_hierarchy, activity)
             candidates.extend(struct_matches)
         
         # 策略2: 基于标题的精确匹配
@@ -163,29 +165,51 @@ class PageMatcher:
         return result
     
     def _match_by_structure(
-        self, 
-        app_id: str, 
-        ui_hierarchy: Dict
+        self,
+        app_id: str,
+        ui_hierarchy: Dict,
+        activity: str = "",
     ) -> List[Tuple[str, float, str]]:
-        """基于UI结构匹配"""
-        # 计算当前页面的结构签名
-        current_signature = self._compute_structure_signature(ui_hierarchy)
-        
-        # 与图谱中的页面对比
+        """基于UI结构匹配（使用 class_name|resource_id 指纹）。
+
+        匹配策略：
+        1. 先算 structural_fingerprint 精确匹配
+        2. 再用 Jaccard 模糊匹配（≥0.7），同 activity 加 0.1 bonus
+        """
+        # 提取当前页面的控件列表
+        current_widgets = self._extract_widgets_from_hierarchy(ui_hierarchy)
+
+        # 计算结构指纹
+        current_fp = Page.compute_structural_fingerprint(
+            app_id, activity, current_widgets
+        )
+
         matches = []
         pages = self.graph.get_all_pages(app_id)
-        
+
         for page in pages:
-            if page.state_hash == current_signature:
+            # 策略 1: 指纹精确匹配
+            if page.structural_fingerprint and page.structural_fingerprint == current_fp:
                 matches.append((page.page_id, 1.0, "structural"))
-            else:
-                # 计算结构相似度
-                similarity = self._compute_structural_similarity(
-                    ui_hierarchy, page
-                )
-                if similarity > 0.7:
-                    matches.append((page.page_id, similarity, "structural"))
-        
+                continue
+
+            # 旧的 state_hash 精确匹配（兼容旧数据）
+            if page.state_hash:
+                current_signature = self._compute_structure_signature(ui_hierarchy)
+                if page.state_hash == current_signature:
+                    matches.append((page.page_id, 0.95, "structural"))
+                    continue
+
+            # 策略 2: Jaccard 模糊匹配
+            similarity = self._compute_structural_similarity(
+                current_widgets, page
+            )
+            # 同 activity 加分
+            if activity and page.activity == activity:
+                similarity += 0.1
+            if similarity > 0.7:
+                matches.append((page.page_id, min(similarity, 1.0), "structural"))
+
         return matches
     
     def _match_by_vector(
@@ -205,46 +229,76 @@ class PageMatcher:
         return Page.compute_state_hash(ui_hierarchy)
     
     def _compute_structural_similarity(
-        self, 
-        ui_hierarchy: Dict, 
-        page: Page
+        self,
+        current_widgets: List[Dict],
+        page: Page,
     ) -> float:
-        """计算结构相似度"""
-        # 简化实现：基于控件类型和数量
-        current_widgets = self._extract_widgets_from_hierarchy(ui_hierarchy)
-        page_widgets = page.widgets
-        
-        if not current_widgets or not page_widgets:
+        """基于 class_name|resource_id 的 Jaccard 系数（搬自 AppGraph）。
+
+        Args:
+            current_widgets: 当前页面控件字典列表
+            page: 已知页面
+
+        Returns:
+            0.0 ~ 1.0 的相似度
+        """
+        # 当前页面的特征集
+        set_a = set(
+            f"{w.get('class_name') or w.get('class', '')}|{w.get('resource_id', '')}"
+            for w in current_widgets
+            if w.get("resource_id")
+        )
+        # 已知页面的特征集
+        set_b = set(
+            f"{(w.class_name if hasattr(w, 'class_name') else '') or ''}|{w.resource_id}"
+            for w in page.widgets
+            if w.resource_id
+        )
+
+        # 如果都没有 resource_id，退回到 class_name 比较
+        if not set_a and not set_b:
+            set_a = set(
+                w.get("class_name") or w.get("class", "")
+                for w in current_widgets
+                if w.get("class_name") or w.get("class")
+            )
+            set_b = set(
+                w.class_name if hasattr(w, "class_name") else ""
+                for w in page.widgets
+                if hasattr(w, "class_name") and w.class_name
+            )
+
+        if not set_a or not set_b:
             return 0.0
-        
-        # 计算控件类型分布的相似度
-        current_types = set(w.get("type", "") for w in current_widgets)
-        page_types = set(w.widget_type.value for w in page_widgets)
-        
-        intersection = len(current_types & page_types)
-        union = len(current_types | page_types)
-        
-        return intersection / union if union > 0 else 0.0
+
+        intersection = set_a & set_b
+        union = set_a | set_b
+        return len(intersection) / len(union) if union else 0.0
     
     def _extract_widgets_from_hierarchy(self, hierarchy: Dict) -> List[Dict]:
-        """从UI层次结构中提取控件"""
+        """从UI层次结构中提取控件（包含 class_name、resource_id 等完整信息）"""
         widgets = []
-        
+
         def traverse(node):
             if isinstance(node, dict):
+                cls = node.get("class_name") or node.get("class", "") or node.get("type", "")
                 widget_info = {
-                    "type": node.get("type", node.get("class", "")),
+                    "class_name": cls,
+                    "class": cls,  # 兼容
+                    "type": cls,
                     "text": node.get("text", ""),
-                    "clickable": node.get("clickable", False)
+                    "resource_id": node.get("resource-id", "") or node.get("resource_id", ""),
+                    "content_desc": node.get("content-desc", "") or node.get("content_description", ""),
+                    "clickable": node.get("clickable", False),
+                    "bounds": node.get("bounds", {}),
+                    "package_name": node.get("package", "") or node.get("package_name", ""),
                 }
-                if widget_info["type"]:
+                if widget_info["class_name"]:
                     widgets.append(widget_info)
-                
-                # 遍历子节点
-                children = node.get("children", [])
-                for child in children:
+
+                for child in node.get("children", []):
                     traverse(child)
-        
+
         traverse(hierarchy)
         return widgets
     
