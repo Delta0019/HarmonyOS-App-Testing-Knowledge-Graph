@@ -258,33 +258,69 @@ class KGClient:
         self,
         app_id: str,
         ui_hierarchy: Dict = None,
-        page_title: str = None
+        page_title: str = None,
+        activity: str = "",
     ) -> Optional[Dict]:
         """
         匹配当前页面
-        
+
         根据UI结构或标题匹配图谱中的页面
-        
+
         Args:
             app_id: 应用ID
             ui_hierarchy: UI控件树
             page_title: 页面标题
-            
+            activity: Android Activity 名
+
         Returns:
             {
-                "page_id": "xxx",
-                "page_name": "首页",
-                "confidence": 0.95,
-                "available_actions": [...]
+                "matched": True/False,
+                "page": {"page_id": ..., "page_name": ..., "confidence": ...},
+                ...
             }
         """
         if self._is_local:
+            # 先尝试用 structural_fingerprint 直接查找
+            if ui_hierarchy and hasattr(self.graph, "find_page_by_fingerprint"):
+                widgets_data = []
+                for child in ui_hierarchy.get("children", []):
+                    widgets_data.append({
+                        "class_name": child.get("class_name") or child.get("class", ""),
+                        "resource_id": child.get("resource-id") or child.get("resource_id", ""),
+                    })
+                fp = Page.compute_structural_fingerprint(app_id, activity, widgets_data)
+                found = self.graph.find_page_by_fingerprint(fp, app_id)
+                if found:
+                    # 更新访问信息
+                    found.visit_count += 1
+                    transitions = self.graph.get_outgoing_transitions(found.page_id)
+                    actions = []
+                    for t in transitions:
+                        tp = self.graph.get_page(t.target_page_id)
+                        actions.append({
+                            "widget_text": t.trigger_widget_text,
+                            "action": t.action_type.value,
+                            "leads_to": tp.page_name if tp else t.target_page_id,
+                            "success_rate": t.success_rate,
+                        })
+                    return {
+                        "matched": True,
+                        "page": {
+                            "page_id": found.page_id,
+                            "page_name": found.page_name,
+                            "confidence": 1.0,
+                        },
+                        "available_actions": actions,
+                    }
+
+            # fallback 到 PageMatcher（语义 + 结构混合匹配）
             result = self.page_matcher.match_page(
                 app_id=app_id,
                 ui_hierarchy=ui_hierarchy,
-                page_title=page_title
+                page_title=page_title,
+                activity=activity,
             )
-            if result:
+            if result and result.page_id and result.confidence > 0:
                 return result.to_dict()
             # 返回未匹配的结果
             return {

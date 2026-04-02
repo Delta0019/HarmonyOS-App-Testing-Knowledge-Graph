@@ -1,27 +1,18 @@
-# Core dependencies
-pydantic>=2.0.0
+# === 核心依赖（必须） ===
+networkx>=3.0              # 内存图数据库
+numpy>=1.24.0              # 向量计算
+pydantic>=2.0.0            # 数据验证
+pyyaml>=6.0                # 配置文件
 typing-extensions>=4.0.0
 
-# Graph Database
-neo4j>=5.0.0
-
-# Vector Database (可选，Demo可用内存模式)
-# pymilvus>=2.3.0
-
-# Embeddings (使用sentence-transformers或API)
+# === 嵌入模型（推荐，不装则使用 Mock 模型） ===
 sentence-transformers>=2.2.0
-numpy>=1.24.0
 
-# API Framework
-fastapi>=0.100.0
-uvicorn>=0.23.0
+# === API 服务（可选，仅 REST API 模式需要） ===
+# fastapi>=0.100.0
+# uvicorn>=0.23.0
+# httpx>=0.24.0
 
-# HTTP Client
-httpx>=0.24.0
-
-# Utilities
-pyyaml>=6.0
-python-dotenv>=1.0.0
-
-# For Demo (使用轻量级内存图)
-networkx>=3.0
+# === 生产数据库（可选，仅生产模式需要） ===
+# neo4j>=5.0.0
+# pymilvus>=2.3.0
