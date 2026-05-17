@@ -1,0 +1,10 @@
+{"action": "swipe", "coordinate": [546, 1780], "coordinate2": [546, 739]}
+{"action": "swipe", "coordinate": [546, 1970], "coordinate2": [546, 830]}
+{"action": "swipe", "coordinate": [546, 1970], "coordinate2": [546, 830]}
+{"action": "open_app", "text": "Simple SMS Messenger"}
+{"action": "click", "coordinate": [402, 416]}
+{"action": "type", "text": "Your dentist appointment is scheduled for 2 PM on Thursday."}
+{"action": "click", "coordinate": [325, 2280]}
+{"action": "type", "text": "Your dentist appointment is scheduled for 2 PM on Thursday."}
+{"action": "click", "coordinate": [1023, 1456]}
+{"action": "answer", "text": "The message 'Your dentist appointment is scheduled for 2 PM on Thursday.' has been sent successfully."}

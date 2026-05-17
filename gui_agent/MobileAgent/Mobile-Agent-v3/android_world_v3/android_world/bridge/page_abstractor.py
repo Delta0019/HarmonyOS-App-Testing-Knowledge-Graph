@@ -121,6 +121,8 @@ def detect_app_id(state) -> str:
         "com.android.systemui",
         "com.android.launcher",
         "com.android.launcher3",
+        "com.google.android.apps.nexuslauncher",
+        "com.google.android.inputmethod.latin",
         "",
         None,
     }

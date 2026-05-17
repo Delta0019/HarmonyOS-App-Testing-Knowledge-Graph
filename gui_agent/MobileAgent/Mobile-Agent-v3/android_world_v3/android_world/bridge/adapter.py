@@ -21,6 +21,7 @@ from android_world.bridge.page_abstractor import (
     state_to_ui_hierarchy,
     extract_page_title,
     detect_app_id,
+    describe_page,
 )
 from android_world.bridge.hint_formatter import (
     format_kg_direction,
@@ -186,13 +187,25 @@ class BridgeAdapter:
         page_before = self._match_page(state_before)
         page_after = self._match_page(state_after)
 
+        # 自动注册未知页面到KG
+        if page_before is None:
+            page_before = self._auto_register_page(state_before)
+        if page_after is None:
+            page_after = self._auto_register_page(state_after)
+
         if page_before and page_after:
             try:
+                # 从state_before的UI元素中匹配触发widget
+                widget_info = self._resolve_trigger_widget(state_before, action_dict)
                 self.kg.report_transition(
                     from_page=page_before,
                     action={
                         "type": action_dict.get("action_type", "click"),
-                        "widget_text": action_dict.get("text", ""),
+                        "widget_text": widget_info.get("text", ""),
+                        "widget_resource_id": widget_info.get("resource_id", ""),
+                        "widget_class": widget_info.get("class_name", ""),
+                        "widget_center": widget_info.get("center", ()),
+                        "input_text": action_dict.get("text", "") if action_dict.get("action_type") == "input" else "",
                     },
                     to_page=page_after,
                     success=success,
@@ -278,6 +291,65 @@ class BridgeAdapter:
             logger.debug(f"[KG] 页面匹配失败: {e}")
 
         return None
+
+    @staticmethod
+    def _resolve_trigger_widget(state, action_dict: dict) -> dict:
+        """根据 action 的 (x, y) 坐标匹配触发的 UI 元素，提取 widget 详细信息。"""
+        x = action_dict.get("x")
+        y = action_dict.get("y")
+        if x is None or y is None:
+            return {"text": action_dict.get("text", "")}
+
+        elems = getattr(state, "ui_elements", None) or []
+        best = None
+        best_area = float("inf")
+        for elem in elems:
+            bp = getattr(elem, "bbox_pixels", None)
+            if not bp:
+                continue
+            if bp.x_min <= x <= bp.x_max and bp.y_min <= y <= bp.y_max:
+                area = (bp.x_max - bp.x_min) * (bp.y_max - bp.y_min)
+                if area < best_area:
+                    best_area = area
+                    best = elem
+
+        if best is None:
+            return {"text": action_dict.get("text", ""), "center": (x, y)}
+
+        return {
+            "text": getattr(best, "text", "") or "",
+            "resource_id": (getattr(best, "resource_id", None)
+                            or getattr(best, "resource_name", None) or ""),
+            "class_name": getattr(best, "class_name", "") or "",
+            "content_desc": getattr(best, "content_description", "") or "",
+            "center": (x, y),
+        }
+
+    def _auto_register_page(self, state) -> Optional[str]:
+        """将未知页面自动注册到KG，使图谱在运行时持续增长。
+
+        Returns:
+            str: 新注册的 page_id，失败返回 None
+        """
+        try:
+            app_id = self.current_app_id or detect_app_id(state)
+            ui_hierarchy = state_to_ui_hierarchy(state)
+            page_title = extract_page_title(state)
+            page_desc = describe_page(state)
+            page_name = page_title or f"auto_{id(state) % 100000}"
+
+            page_id = self.kg.add_page(
+                app_id=app_id,
+                page_name=page_name,
+                page_type="other",
+                description=page_desc,
+                ui_hierarchy=ui_hierarchy,
+            )
+            logger.info(f"[KG] 自动注册新页面: {page_name} ({page_id})")
+            return page_id
+        except Exception as e:
+            logger.debug(f"[KG] 自动注册页面失败: {e}")
+            return None
 
     def _expected_next_page_id(self) -> Optional[str]:
         """获取宏观路径中下一步期望到达的页面ID。"""

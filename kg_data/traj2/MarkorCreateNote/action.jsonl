@@ -1,0 +1,7 @@
+{"action": "open_app", "text": "Markor"}
+{"action": "click", "coordinate": [974, 2081]}
+{"action": "type", "text": "brave_violin_2c5o"}
+{"action": "click", "coordinate": [930, 1124]}
+{"action": "type", "text": "The library book is due back on the 15th."}
+{"action": "click", "coordinate": [826, 197]}
+{"action": "answer", "text": "The note 'brave_violin_2c5o.md' has been created and saved with the text: 'The library book is due back on the 15th.'"}

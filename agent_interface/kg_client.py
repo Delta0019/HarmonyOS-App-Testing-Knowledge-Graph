@@ -26,7 +26,7 @@ import os
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from kg_core.schema import Page, Widget, Transition, ActionType, PageType
+from kg_core.schema import Page, Widget, Transition, ActionType, PageType, WidgetType
 from kg_core.graph_store import MemoryGraphStore
 from kg_core.vector_store import VectorStoreManager
 from kg_core.embeddings import EmbeddingModel
@@ -550,35 +550,123 @@ class KGClient:
         ui_hierarchy: Dict = None
     ) -> str:
         """
-        添加新页面到图谱
-        
+        添加新页面到图谱，自动从 ui_hierarchy 提取 widgets 和结构指纹。
+
         Returns:
             页面ID
         """
-        page_id = Page.generate_id(app_id, page_name)
-        
+        # 从 ui_hierarchy 提取 widgets 和状态哈希
+        state_hash = ""
+        structural_fingerprint = ""
+        widgets = []
+
+        if ui_hierarchy:
+            state_hash = Page.compute_state_hash(ui_hierarchy)
+
+        page_id = Page.generate_id(app_id, page_name, state_hash)
+
+        if ui_hierarchy:
+            widgets = self._extract_widgets(ui_hierarchy, page_id)
+            # 将 children 作为 widgets_data 传入计算结构指纹
+            widgets_data = ui_hierarchy.get("children", [])
+            if widgets_data:
+                structural_fingerprint = Page.compute_structural_fingerprint(
+                    app_id, "", widgets_data
+                )
+
         page = Page(
             page_id=page_id,
             page_name=page_name,
             app_id=app_id,
             page_type=PageType(page_type),
+            state_hash=state_hash,
+            structural_fingerprint=structural_fingerprint,
             description=description,
-            intents=intents or []
+            intents=intents or [],
+            widgets=widgets,
         )
-        
+
         if self._is_local:
             self.graph.add_page(page)
-            
-            # 生成并存储向量
+
+            # 生成更完整的向量嵌入（合并 page_name + description + intents）
+            text_parts = [page_name]
             if description:
-                vec = self.embedder.encode_single(description)
-                self.vectors.pages.insert(page_id, vec, {
-                    "name": page_name,
-                    "description": description,
-                    "intents": intents or []
-                })
-        
+                text_parts.append(description)
+            if intents:
+                text_parts.extend(intents)
+            combined_text = " ".join(text_parts)
+
+            vec = self.embedder.encode_single(combined_text)
+            self.vectors.pages.insert(page_id, vec, {
+                "name": page_name,
+                "description": description,
+                "intents": intents or []
+            })
+
         return page_id
+
+    # ---- Widget 提取辅助方法 ----
+
+    @staticmethod
+    def _extract_widgets(ui_hierarchy: Dict, page_id: str) -> List[Widget]:
+        """从 UI 层次结构提取可交互控件。"""
+        widgets = []
+
+        def traverse(node, xpath=""):
+            if not isinstance(node, dict):
+                return
+
+            current_xpath = f"{xpath}/{node.get('class', 'unknown')}"
+
+            is_interactive = (
+                node.get("clickable", False)
+                or node.get("scrollable", False)
+                or node.get("editable", False)
+            )
+
+            if is_interactive:
+                widget_id = Widget.generate_id(page_id, current_xpath)
+                widget = Widget(
+                    widget_id=widget_id,
+                    widget_type=KGClient._infer_widget_type(node),
+                    text=node.get("text", ""),
+                    content_desc=node.get("content-desc", ""),
+                    resource_id=node.get("resource-id", ""),
+                    xpath=current_xpath,
+                    bounds=node.get("bounds", {}),
+                    is_clickable=node.get("clickable", False),
+                    is_scrollable=node.get("scrollable", False),
+                    is_editable=node.get("editable", False),
+                )
+                widgets.append(widget)
+
+            for i, child in enumerate(node.get("children", [])):
+                traverse(child, f"{current_xpath}[{i}]")
+
+        traverse(ui_hierarchy)
+        return widgets
+
+    @staticmethod
+    def _infer_widget_type(node: Dict) -> WidgetType:
+        """推断控件类型。"""
+        class_name = node.get("class", "").lower()
+        if "button" in class_name:
+            return WidgetType.BUTTON
+        elif "edittext" in class_name or "input" in class_name:
+            return WidgetType.INPUT
+        elif "textview" in class_name or "text" in class_name:
+            return WidgetType.TEXT
+        elif "imageview" in class_name or "image" in class_name:
+            return WidgetType.IMAGE
+        elif "listview" in class_name or "recyclerview" in class_name:
+            return WidgetType.LIST
+        elif "checkbox" in class_name:
+            return WidgetType.CHECKBOX
+        elif "switch" in class_name:
+            return WidgetType.SWITCH
+        else:
+            return WidgetType.OTHER
     
     def register_intent(
         self,
@@ -791,6 +879,57 @@ class KGClient:
             response = self._http.get("/api/v1/graph/export")
             return response.json()
     
+    def save(self, directory: str):
+        """持久化 KG 数据（graph + vectors）到目录。"""
+        import json, os
+        os.makedirs(directory, exist_ok=True)
+
+        # 保存图谱
+        graph_path = os.path.join(directory, "graph.json")
+        self.graph.save_to_json(graph_path)
+
+        # 保存向量（pages + intents）
+        vectors_path = os.path.join(directory, "vectors.json")
+        vec_data = {}
+        for store_name in ("pages", "intents"):
+            store = self.vectors.get_store(store_name)
+            entries = {}
+            for vid, vec in store.vectors.items():
+                entries[vid] = {
+                    "vector": vec.tolist(),
+                    "metadata": store.metadata.get(vid, {}),
+                }
+            vec_data[store_name] = entries
+
+        with open(vectors_path, "w", encoding="utf-8") as f:
+            json.dump(vec_data, f, ensure_ascii=False)
+
+        print(f"[KG] 已保存到 {directory} "
+              f"(pages={len(self.graph.pages)}, "
+              f"transitions={len(self.graph.transitions)})")
+
+    def load(self, directory: str):
+        """从目录加载 KG 数据。"""
+        import json, os
+
+        graph_path = os.path.join(directory, "graph.json")
+        if os.path.exists(graph_path):
+            self.graph.load_from_json(graph_path)
+
+        vectors_path = os.path.join(directory, "vectors.json")
+        if os.path.exists(vectors_path):
+            with open(vectors_path, "r", encoding="utf-8") as f:
+                vec_data = json.load(f)
+
+            for store_name in ("pages", "intents"):
+                store = self.vectors.get_store(store_name)
+                for vid, entry in vec_data.get(store_name, {}).items():
+                    store.insert(vid, entry["vector"], entry.get("metadata", {}))
+
+        print(f"[KG] 已加载 {directory} "
+              f"(pages={len(self.graph.pages)}, "
+              f"transitions={len(self.graph.transitions)})")
+
     def clear_graph(self):
         """清空图谱（谨慎使用）"""
         if self._is_local:

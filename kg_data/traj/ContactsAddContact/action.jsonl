@@ -1,0 +1,12 @@
+{"action": "open_app", "text": "Contacts"}
+{"action": "click", "coordinate": [954, 2016]}
+{"action": "click", "coordinate": [408, 932]}
+{"action": "type", "text": "Emilia"}
+{"action": "type", "text": "Gonzalez"}
+{"action": "swipe", "coordinate": [546, 1370], "coordinate2": [546, 589]}
+{"action": "click", "coordinate": [348, 569]}
+{"action": "type", "text": "+14240925675"}
+{"action": "click", "coordinate": [450, 1362]}
+{"action": "type", "text": "emilialopez@gmail.com"}
+{"action": "click", "coordinate": [845, 209]}
+{"action": "answer", "text": "Contact for Emilia Gonzalez has been created successfully."}

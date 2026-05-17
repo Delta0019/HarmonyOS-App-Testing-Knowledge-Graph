@@ -217,6 +217,14 @@ class MobileAgentV3_M3A(base_agent.EnvironmentInteractingAgent):
                 from agent_interface.kg_client import KGClient
 
                 kg_client = KGClient()
+                # 如果有预建的KG数据，自动加载
+                if kg_data_dir and os.path.isdir(kg_data_dir):
+                    try:
+                        kg_client.load(kg_data_dir)
+                    except Exception as load_err:
+                        print(f"Warning: Failed to load KG data from {kg_data_dir}: {load_err}")
+                self.kg_client = kg_client
+                self.kg_data_dir = kg_data_dir
                 utg_path_for_bridge = self.utg_path or ""
                 self.bridge = BridgeAdapter(
                     kg_client,
@@ -303,6 +311,13 @@ class MobileAgentV3_M3A(base_agent.EnvironmentInteractingAgent):
         self.additional_guidelines = task_guidelines
 
     def reset(self, go_home_on_reset: bool = False):
+        # KG: 每个任务结束/reset 时自动保存（无论成功或失败/超时）
+        if hasattr(self, 'bridge') and self.bridge and hasattr(self, 'kg_client') and hasattr(self, 'kg_data_dir') and self.kg_data_dir:
+            try:
+                self.kg_client.save(self.kg_data_dir)
+            except Exception as e:
+                print(f"[KG] Auto-save on reset failed: {e}")
+
         super().reset(go_home_on_reset)
         # Hide the coordinates on screen which might affect the vision model.
         self.env.hide_automation_ui()
@@ -352,6 +367,28 @@ class MobileAgentV3_M3A(base_agent.EnvironmentInteractingAgent):
         ## perception ###
         state = self.get_post_transition_state()
         before_screenshot = state.pixels.copy()
+
+        # KG: 第一步时进行宏观路径规划
+        if step_idx == 0 and self.bridge:
+            try:
+                plan_result = self.bridge.plan_task(app_id="", intent=goal, state=state)
+                if plan_result.get("success"):
+                    print(f"[KG] Macro path planned: {plan_result['path'].get('total_steps', '?')} steps")
+                else:
+                    print(f"[KG] No path found, will use UTG-only hints")
+            except Exception as e:
+                print(f"[KG] plan_task failed: {e}")
+
+        # KG: 每步同步路径信息到InfoPool供Manager使用
+        if self.bridge:
+            try:
+                kg_info = self.bridge.get_macro_plan_info()
+                self.info_pool.kg_macro_plan = kg_info.get("kg_macro_plan", "")
+                self.info_pool.kg_current_step = kg_info.get("kg_current_step", 0)
+                self.info_pool.kg_next_page = kg_info.get("kg_next_page", "")
+                self.info_pool.kg_confidence = kg_info.get("kg_confidence", 0.0)
+            except Exception:
+                pass
 
         if self.info_pool.instruction not in self.task_name:
             task_output_dir = os.path.join(self.output_path, self.info_pool.instruction.replace(" ", "_")[:50])
@@ -519,6 +556,13 @@ class MobileAgentV3_M3A(base_agent.EnvironmentInteractingAgent):
             )
 
         if converted_action.action_type == 'status':
+            # KG: 任务结束时自动保存
+            if self.bridge and hasattr(self, 'kg_client') and hasattr(self, 'kg_data_dir') and self.kg_data_dir:
+                try:
+                    self.kg_client.save(self.kg_data_dir)
+                except Exception as e:
+                    print(f"[KG] Auto-save failed: {e}")
+
             outcome = "A"
             error_description = "None"
             if converted_action.goal_status == 'infeasible':

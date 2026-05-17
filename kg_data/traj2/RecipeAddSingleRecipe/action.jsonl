@@ -1,0 +1,14 @@
+{"action": "open_app", "text": "Broccoli"}
+{"action": "click", "coordinate": [974, 2230]}
+{"action": "click", "coordinate": [350, 924]}
+{"action": "type", "text": "Veggie and Hummus Sandwich"}
+{"action": "type", "text": "A delicious and healthy choice for any time of the day."}
+{"action": "swipe", "coordinate": [546, 1387], "coordinate2": [546, 462]}
+{"action": "click", "coordinate": [301, 745]}
+{"action": "type", "text": "2 servings"}
+{"action": "type", "text": "20 mins"}
+{"action": "type", "text": "to preference"}
+{"action": "click", "coordinate": [301, 1402]}
+{"action": "type", "text": "Spread hummus on bread, add cucumber, bell pepper, carrot, and lettuce. Garnish with fresh herbs for a more vibrant taste."}
+{"action": "click", "coordinate": [965, 201]}
+{"action": "answer", "text": "Recipe added successfully."}

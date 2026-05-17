@@ -1,0 +1,10 @@
+{"action": "open_app", "text": "Pro Expense"}
+{"action": "click", "coordinate": [974, 2186]}
+{"action": "type", "text": "Library Fees"}
+{"action": "type", "text": "284.16"}
+{"action": "swipe", "coordinate": [940, 832], "coordinate2": [185, 832]}
+{"action": "swipe", "coordinate": [940, 832], "coordinate2": [185, 832]}
+{"action": "click", "coordinate": [480, 816]}
+{"action": "type", "text": "Remember to transfer funds"}
+{"action": "click", "coordinate": [456, 1307]}
+{"action": "done"}

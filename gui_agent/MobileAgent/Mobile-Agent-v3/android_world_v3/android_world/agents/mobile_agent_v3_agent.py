@@ -117,6 +117,16 @@ class Manager(BaseAgent):
             else:
                 prompt += f"{info_pool.add_info_token}\n\n"
             
+            # KG宏观路径提示（如果可用）
+            if info_pool.kg_macro_plan:
+                prompt += "### Knowledge Graph Navigation Hint ###\n"
+                prompt += f"The Knowledge Graph suggests the following page-level navigation path:\n"
+                prompt += f"  Path: {info_pool.kg_macro_plan}\n"
+                if info_pool.kg_next_page:
+                    prompt += f"  Next target page: {info_pool.kg_next_page}\n"
+                prompt += f"  Confidence: {info_pool.kg_confidence:.0%}\n"
+                prompt += "Consider this path when making your plan, but adapt if the actual UI differs.\n\n"
+
             prompt += "Provide your output in the following format which contains two parts:\n"
             prompt += "### Thought ###\n"
             prompt += "A detailed explanation of your rationale for the plan and subgoals.\n\n"

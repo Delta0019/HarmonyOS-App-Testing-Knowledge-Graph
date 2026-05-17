@@ -250,6 +250,7 @@ def bootstrap_from_exploration(
                             page_name=page_name,
                             page_type="other",
                             description=page_desc,
+                            ui_hierarchy=ui_hierarchy,
                         )
                         seen_pages[page_key] = page_id
                         stats["pages"] += 1

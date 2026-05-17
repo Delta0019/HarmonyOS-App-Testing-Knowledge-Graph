@@ -1,0 +1,23 @@
+{"action": "open_app", "text": "Simple Calendar Pro"}
+{"action": "click", "coordinate": [1016, 394]}
+{"action": "click", "coordinate": [1024, 394]}
+{"action": "click", "coordinate": [1024, 394]}
+{"action": "click", "coordinate": [1024, 394]}
+{"action": "click", "coordinate": [1024, 394]}
+{"action": "click", "coordinate": [974, 2231]}
+{"action": "click", "coordinate": [974, 2231]}
+{"action": "type", "text": "Call with Alice"}
+{"action": "click", "coordinate": [204, 715]}
+{"action": "type", "text": "We will prepare for upcoming project milestones."}
+{"action": "click", "coordinate": [974, 1203]}
+{"action": "click", "coordinate": [542, 1536]}
+{"action": "click", "coordinate": [842, 1826]}
+{"action": "click", "coordinate": [974, 1352]}
+{"action": "click", "coordinate": [712, 845]}
+{"action": "click", "coordinate": [842, 1826]}
+{"action": "click", "coordinate": [974, 1352]}
+{"action": "click", "coordinate": [712, 845]}
+{"action": "click", "coordinate": [546, 1627]}
+{"action": "click", "coordinate": [842, 1826]}
+{"action": "click", "coordinate": [1025, 214]}
+{"action": "done"}
